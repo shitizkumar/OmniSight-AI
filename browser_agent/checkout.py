@@ -30,6 +30,7 @@ def automate_checkout() -> list[Path]:
                 viewport=VIEWPORTS["phone"],
                 device_scale_factor=1,
             )
+
             page.goto(CHECKOUT_URL, wait_until="domcontentloaded")
 
             page.get_by_label("Full name").fill("Test Customer")
@@ -48,11 +49,22 @@ def automate_checkout() -> list[Path]:
                 "Demo order submitted successfully",
             ).wait_for()
 
+            # Save the rendered HTML for Day 6 vision inspection.
+            html_path = OUTPUT_DIR / "checkout.html"
+            html_path.write_text(
+                page.content(),
+                encoding="utf-8",
+            )
+            print(f"HTML snapshot: {html_path}")
+
+            # Capture and validate all responsive viewports.
             for name, viewport in VIEWPORTS.items():
                 page.set_viewport_size(viewport)
 
+                screenshot_path = OUTPUT_DIR / f"checkout_{name}.png"
+
                 page.screenshot(
-                    path=str(OUTPUT_DIR / f"checkout_{name}.png"),
+                    path=str(screenshot_path),
                     full_page=True,
                     animations="disabled",
                 )
@@ -67,7 +79,7 @@ def automate_checkout() -> list[Path]:
                         f"Horizontal overflow detected at {name}: {viewport}"
                     )
 
-                screenshots.append(OUTPUT_DIR / f"checkout_{name}.png")
+                screenshots.append(screenshot_path)
 
             print("Checkout completed successfully.")
             print("Demo order submitted; no payment was processed.")
