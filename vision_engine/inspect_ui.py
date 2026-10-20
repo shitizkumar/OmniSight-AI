@@ -1,4 +1,4 @@
-﻿
+
 import json
 from pathlib import Path
 
@@ -113,4 +113,3 @@ def inspect_html() -> dict:
 if __name__ == "__main__":
     print(json.dumps(inspect_html(), indent=2))
     print(f"\nReport saved to: {REPORT_PATH}")
-

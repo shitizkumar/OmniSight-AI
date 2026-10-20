@@ -1,4 +1,5 @@
 
+import json
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
@@ -6,6 +7,7 @@ from playwright.sync_api import sync_playwright
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 OUTPUT_DIR = PROJECT_ROOT / "artifacts"
+REPORT_PATH = OUTPUT_DIR / "responsive_report.json"
 
 CHECKOUT_URL = "http://localhost:5173"
 
@@ -17,10 +19,25 @@ VIEWPORTS = {
 }
 
 
+def build_responsive_report(results: list[dict]) -> dict:
+    """Summarize responsive viewport checks."""
+    defects_found = sum(
+        result["horizontal_overflow"] for result in results
+    )
+
+    return {
+        "status": "failed" if defects_found else "passed",
+        "viewports_tested": len(results),
+        "defects_found": defects_found,
+        "results": results,
+    }
+
+
 def automate_checkout() -> list[Path]:
-    """Complete a demo checkout and capture responsive screenshots."""
+    """Run demo checkout and report responsive layout results."""
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     screenshots = []
+    results = []
 
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
@@ -30,37 +47,26 @@ def automate_checkout() -> list[Path]:
                 viewport=VIEWPORTS["phone"],
                 device_scale_factor=1,
             )
-
             page.goto(CHECKOUT_URL, wait_until="domcontentloaded")
 
             page.get_by_label("Full name").fill("Test Customer")
             page.get_by_label("Email address").fill("test@example.com")
-            page.get_by_label("Street address").fill("123 Test Street")
+            page.get_by_label("Street address").fill("123 TestStreet")
             page.get_by_label("City").fill("Dehradun")
             page.get_by_label("PIN code").fill("248001")
             page.get_by_label("Quantity").select_option("2")
-
-            page.get_by_role(
-                "button",
-                name="Place demo order",
-            ).click()
+            page.get_by_role("button", name="Place demo order").click()
 
             page.get_by_role("status").get_by_text(
-                "Demo order submitted successfully",
+                "Demo order submitted successfully"
             ).wait_for()
 
-            # Save the rendered HTML for Day 6 vision inspection.
-            html_path = OUTPUT_DIR / "checkout.html"
-            html_path.write_text(
-                page.content(),
-                encoding="utf-8",
+            (OUTPUT_DIR / "checkout.html").write_text(
+                page.content(), encoding="utf-8"
             )
-            print(f"HTML snapshot: {html_path}")
 
-            # Capture and validate all responsive viewports.
             for name, viewport in VIEWPORTS.items():
                 page.set_viewport_size(viewport)
-
                 screenshot_path = OUTPUT_DIR / f"checkout_{name}.png"
 
                 page.screenshot(
@@ -69,24 +75,41 @@ def automate_checkout() -> list[Path]:
                     animations="disabled",
                 )
 
-                has_horizontal_overflow = page.evaluate(
-                    "document.documentElement.scrollWidth > "
-                    "document.documentElement.clientWidth"
-                )
+                dimensions = page.evaluate("""() => ({
+                    viewport_width: document.documentElement.clientWidth,
+                    document_width: document.documentElement.scrollWidth
+                })""")
 
-                if has_horizontal_overflow:
-                    raise AssertionError(
-                        f"Horizontal overflow detected at {name}: {viewport}"
-                    )
-
+                results.append({
+                    "viewport": name,
+                    **viewport,
+                    **dimensions,
+                    "horizontal_overflow": (
+                        dimensions["document_width"]
+                        > dimensions["viewport_width"]
+                    ),
+                    "screenshot": str(
+                        screenshot_path.relative_to(PROJECT_ROOT)
+                    ),
+                })
                 screenshots.append(screenshot_path)
+
+            report = build_responsive_report(results)
+            REPORT_PATH.write_text(
+                json.dumps(report, indent=2), encoding="utf-8"
+            )
+
+            print(json.dumps(report, indent=2))
+            print(f"\nResponsive report saved to: {REPORT_PATH}")
+
+            if report["defects_found"]:
+                raise AssertionError(
+                    f"Horizontal overflow found in "
+                    f"{report['defects_found']} viewport(s)."
+                )
 
             print("Checkout completed successfully.")
             print("Demo order submitted; no payment was processed.")
-
-            for screenshot in screenshots:
-                print(f"Screenshot: {screenshot}")
-
             return screenshots
 
         finally:
