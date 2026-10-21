@@ -1,12 +1,16 @@
-
+﻿
 import json
+import os
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
+from vision_engine.vlm_client import analyze_ui
+
 ROOT_DIR = Path(__file__).resolve().parent.parent
 ARTIFACTS_DIR = ROOT_DIR / "artifacts"
 HTML_PATH = ARTIFACTS_DIR / "checkout.html"
+SCREENSHOT_PATH = ARTIFACTS_DIR / "checkout_phone.png"
 REPORT_PATH = ARTIFACTS_DIR / "ui_inspection_report.json"
 
 EXPECTED_CONTROLS = {
@@ -23,6 +27,19 @@ def inspect_html() -> dict:
             "Run python -m browser_agent.checkout first."
         )
 
+    if os.getenv("OPENAI_API_KEY") and os.getenv("OPENAI_VISION_MODEL"):
+        report = analyze_ui(SCREENSHOT_PATH, HTML_PATH)
+    else:
+        report = inspect_locally()
+
+    REPORT_PATH.write_text(
+        json.dumps(report, indent=2),
+        encoding="utf-8",
+    )
+    return report
+
+
+def inspect_locally() -> dict:
     html = HTML_PATH.read_text(encoding="utf-8")
     defects = []
 
@@ -58,19 +75,14 @@ def inspect_html() -> dict:
                     or bool(control.get_attribute("aria-labelledby"))
                     or (
                         bool(control_id)
-                        and page.locator(
-                            f'label[for="{control_id}"]'
-                        ).count() > 0
+                        and page.locator(f'label[for="{control_id}"]').count() > 0
                     )
-                    or control.locator(
-                        "xpath=ancestor::label"
-                    ).count() > 0
+                    or control.locator("xpath=ancestor::label").count() > 0
                 )
 
                 if not has_label:
                     defects.append({
-                        "element": control.get_attribute("name")
-                        or f"control_{index}",
+                        "element": control.get_attribute("name") or f"control_{index}",
                         "issue": "Form control may lack an accessible label.",
                         "severity": "medium",
                         "evidence": f"Control index {index} has no detected label.",
@@ -90,24 +102,16 @@ def inspect_html() -> dict:
                     "evidence": json.dumps(dimensions),
                     "suggested_fix": "Review fixed widths and responsive CSS.",
                 })
-
         finally:
             browser.close()
 
-    report = {
+    return {
         "inspection_status": "completed",
         "inspection_method": "local_html_checks",
         "ai_vision_used": False,
         "defects_found": len(defects),
         "defects": defects,
     }
-
-    REPORT_PATH.write_text(
-        json.dumps(report, indent=2),
-        encoding="utf-8",
-    )
-
-    return report
 
 
 if __name__ == "__main__":
