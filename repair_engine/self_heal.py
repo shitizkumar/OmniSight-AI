@@ -14,7 +14,7 @@ def apply_css_patch(
     screenshot_path: Path,
     viewport: dict | None = None,
 ) -> dict:
-    """Apply CSS to a local browser DOM and capture a screenshot."""
+    """Apply a CSS patch locally and verify its effect on horizontal overflow."""
     html_path = Path(html_path)
     screenshot_path = Path(screenshot_path)
 
@@ -34,8 +34,10 @@ def apply_css_patch(
     width, height = viewport.get("width"), viewport.get("height")
 
     if (
-        type(width) is not int or type(height) is not int
-        or width <= 0 or height <= 0
+        type(width) is not int
+        or type(height) is not int
+        or width <= 0
+        or height <= 0
     ):
         raise ValueError("Viewport dimensions must be positive integers.")
 
@@ -47,12 +49,26 @@ def apply_css_patch(
         try:
             page = browser.new_page(viewport=viewport)
             page.set_content(html, wait_until="domcontentloaded")
-            page.add_style_tag(content=css_patch)
 
-            dimensions = page.evaluate("""() => ({
+            before_dimensions = page.evaluate("""() => ({
                 viewport_width: document.documentElement.clientWidth,
                 document_width: document.documentElement.scrollWidth
             })""")
+            before_overflow = (
+                before_dimensions["document_width"]
+                > before_dimensions["viewport_width"]
+            )
+
+            page.add_style_tag(content=css_patch)
+
+            after_dimensions = page.evaluate("""() => ({
+                viewport_width: document.documentElement.clientWidth,
+                document_width: document.documentElement.scrollWidth
+            })""")
+            after_overflow = (
+                after_dimensions["document_width"]
+                > after_dimensions["viewport_width"]
+            )
 
             page.screenshot(
                 path=str(screenshot_path),
@@ -62,15 +78,30 @@ def apply_css_patch(
         finally:
             browser.close()
 
+    if before_overflow and not after_overflow:
+        verification_status = "repair_verified"
+    elif before_overflow and after_overflow:
+        verification_status = "repair_failed"
+    elif not before_overflow and after_overflow:
+        verification_status = "regression_detected"
+    else:
+        verification_status = "no_repair_needed"
+
     result = {
         "status": "css_applied",
+        "verification_status": verification_status,
         "application_method": "local_browser_dom",
         "screenshot": str(screenshot_path),
         "css_patch": css_patch,
-        "horizontal_overflow": (
-            dimensions["document_width"] > dimensions["viewport_width"]
-        ),
-        "dimensions": dimensions,
+        "before": {
+            "horizontal_overflow": before_overflow,
+            "dimensions": before_dimensions,
+        },
+        "after": {
+            "horizontal_overflow": after_overflow,
+            "dimensions": after_dimensions,
+        },
+        "horizontal_overflow": after_overflow,
         "source_code_modified": False,
     }
 
