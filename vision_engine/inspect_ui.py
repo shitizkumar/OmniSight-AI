@@ -20,6 +20,7 @@ EXPECTED_CONTROLS = {
 }
 
 
+
 def inspect_html() -> dict:
     if not HTML_PATH.exists():
         raise FileNotFoundError(
@@ -27,17 +28,23 @@ def inspect_html() -> dict:
             "Run python -m browser_agent.checkout first."
         )
 
-    if os.getenv("OPENAI_API_KEY") and os.getenv("OPENAI_VISION_MODEL"):
+    provider = os.getenv("VLM_PROVIDER", "openai").strip().lower()
+
+    if provider == "local":
+        report = inspect_locally()
+    elif provider in {"openai", "xai"}:
         report = analyze_ui(SCREENSHOT_PATH, HTML_PATH)
     else:
-        report = inspect_locally()
+        raise ValueError(
+            f"Unsupported VLM_PROVIDER '{provider}'. "
+            "Use local, openai, or xai."
+        )
 
     REPORT_PATH.write_text(
         json.dumps(report, indent=2),
         encoding="utf-8",
     )
     return report
-
 
 def inspect_locally() -> dict:
     html = HTML_PATH.read_text(encoding="utf-8")

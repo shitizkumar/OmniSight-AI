@@ -6,18 +6,36 @@ from pathlib import Path
 import httpx
 
 
+PROVIDERS = {
+    "openai": {
+        "endpoint": "https://api.openai.com/v1/responses",
+        "key_env": "OPENAI_API_KEY",
+        "model_env": "OPENAI_VISION_MODEL",
+    },
+    "xai": {
+        "endpoint": "https://api.x.ai/v1/responses",
+        "key_env": "XAI_API_KEY",
+        "model_env": "XAI_VISION_MODEL",
+    },
+}
+
+
 def analyze_ui(screenshot_path: Path, html_path: Path) -> dict:
-    api_key = os.getenv("OPENAI_API_KEY")
-    model = os.getenv("OPENAI_VISION_MODEL")
+    provider = os.getenv("VLM_PROVIDER", "openai").strip().lower()
+
+    if provider not in PROVIDERS:
+        raise ValueError(
+            f"Unsupported VLM_PROVIDER '{provider}'. Use openai or xai."
+        )
+
+    config = PROVIDERS[provider]
+    api_key = os.getenv(config["key_env"])
+    model = os.getenv(config["model_env"])
 
     if not api_key:
-        raise RuntimeError(
-            "OPENAI_API_KEY is missing. VLM analysis was not run."
-        )
+        raise RuntimeError(f"{config['key_env']} is missing.")
     if not model:
-        raise RuntimeError(
-            "Set OPENAI_VISION_MODEL to a vision-capable model."
-        )
+        raise RuntimeError(f"Set {config['model_env']} to a vision-capable model.")
     if not screenshot_path.is_file() or not html_path.is_file():
         raise FileNotFoundError("Screenshot or HTML snapshot not found.")
 
@@ -38,7 +56,7 @@ HTML snapshot:
 """
 
     response = httpx.post(
-        "https://api.openai.com/v1/responses",
+        config["endpoint"],
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
@@ -70,6 +88,10 @@ HTML snapshot:
         for content in item.get("content", [])
         if content.get("type") == "output_text"
     )
+
+    if not output_text:
+        raise ValueError("VLM response did not contain output text.")
+
     result = json.loads(output_text)
     defects = result.get("defects")
 
@@ -78,7 +100,7 @@ HTML snapshot:
 
     return {
         "inspection_status": "completed",
-        "inspection_method": "openai_vlm",
+        "inspection_method": f"{provider}_vlm",
         "ai_vision_used": True,
         "defects_found": len(defects),
         "defects": defects,
