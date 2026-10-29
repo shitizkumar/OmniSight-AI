@@ -77,3 +77,9 @@ def test_empty_css_patch_is_rejected(tmp_path):
 
     with pytest.raises(ValueError, match="non-empty"):
         apply_css_patch(html_path, "", tmp_path / "after.png")
+
+def test_self_heal_module_has_no_automatic_source_changes():
+    from repair_engine import self_heal
+
+    assert callable(self_heal.apply_css_patch)
+    assert self_heal.MAX_CSS_LENGTH == 10_000

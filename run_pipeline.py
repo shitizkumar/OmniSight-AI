@@ -1,3 +1,4 @@
+
 import subprocess
 import sys
 from pathlib import Path
@@ -8,6 +9,7 @@ STAGES = [
     ("Checkout capture", "browser_agent.checkout"),
     ("UI inspection", "vision_engine.inspect_ui"),
     ("Repair recommendations", "repair_engine.recommend"),
+    ("Self-healing verification", "repair_engine.self_heal"),
 ]
 
 

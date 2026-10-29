@@ -1,3 +1,4 @@
+
 import subprocess
 
 import run_pipeline
@@ -19,6 +20,7 @@ def test_pipeline_runs_stages_in_order(monkeypatch):
         "browser_agent.checkout",
         "vision_engine.inspect_ui",
         "repair_engine.recommend",
+        "repair_engine.self_heal",
     ]
 
 

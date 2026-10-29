@@ -108,3 +108,64 @@ def apply_css_patch(
     report_path = screenshot_path.with_name("self_heal_report.json")
     report_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
     return result
+
+INSPECTION_REPORT_PATH = ARTIFACTS_DIR / "ui_inspection_report.json"
+HTML_PATH = ARTIFACTS_DIR / "checkout.html"
+SCREENSHOT_PATH = ARTIFACTS_DIR / "checkout_after_fix.png"
+
+DEFAULT_OVERFLOW_PATCH = """
+* {
+    box-sizing: border-box;
+}
+img, input, select, textarea, button {
+    max-width: 100%;
+}
+"""
+
+
+def main() -> int:
+    if not INSPECTION_REPORT_PATH.is_file():
+        raise FileNotFoundError(
+            f"Inspection report not found: {INSPECTION_REPORT_PATH}"
+        )
+
+    report = json.loads(
+        INSPECTION_REPORT_PATH.read_text(encoding="utf-8")
+    )
+    defects = report.get("defects")
+
+    if not isinstance(defects, list):
+        raise ValueError("Inspection report must contain a defects list.")
+
+    overflow_found = any(
+        isinstance(defect, dict)
+        and "overflow" in str(defect.get("issue", "")).lower()
+        for defect in defects
+    )
+
+    if not overflow_found:
+        result = {
+            "status": "skipped",
+            "verification_status": "no_repair_needed",
+            "reason": "No horizontal overflow defect was reported.",
+            "source_code_modified": False,
+        }
+        ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+        (ARTIFACTS_DIR / "self_heal_report.json").write_text(
+            json.dumps(result, indent=2),
+            encoding="utf-8",
+        )
+    else:
+        result = apply_css_patch(
+            html_path=HTML_PATH,
+            css_patch=DEFAULT_OVERFLOW_PATCH,
+            screenshot_path=SCREENSHOT_PATH,
+            viewport={"width": 320, "height": 720},
+        )
+
+    print(json.dumps(result, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
