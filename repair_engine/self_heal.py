@@ -7,6 +7,60 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ARTIFACTS_DIR = PROJECT_ROOT / "artifacts"
 MAX_CSS_LENGTH = 10_000
 
+APP_CSS_PATH = PROJECT_ROOT / "mock-store" / "src" / "App.css"
+BACKUP_CSS_PATH = ARTIFACTS_DIR / "App.css.backup"
+
+
+def apply_source_patch(css_patch: str) -> dict:
+    """Apply a CSS patch to the React source with a backup."""
+    if not isinstance(css_patch, str) or not css_patch.strip():
+        raise ValueError("CSS patch must be a non-empty string.")
+
+    if len(css_patch) > MAX_CSS_LENGTH:
+        raise ValueError("CSS patch is too long.")
+
+    if "@import" in css_patch.lower() or "javascript:" in css_patch.lower():
+        raise ValueError("CSS patch contains a disallowed construct.")
+
+    if not APP_CSS_PATH.is_file():
+        raise FileNotFoundError(APP_CSS_PATH)
+
+    original_css = APP_CSS_PATH.read_text(encoding="utf-8")
+
+    if css_patch.strip() in original_css:
+        raise ValueError("CSS patch already exists in source.")
+
+    ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+    BACKUP_CSS_PATH.write_text(original_css, encoding="utf-8")
+
+    updated_css = (
+        original_css.rstrip()
+        + "\n\n/* OmniSight automated repair */\n"
+        + css_patch.strip()
+        + "\n"
+    )
+
+    APP_CSS_PATH.write_text(updated_css, encoding="utf-8")
+
+    return {
+        "status": "source_patched",
+        "source_file": str(APP_CSS_PATH),
+        "backup_file": str(BACKUP_CSS_PATH),
+        "source_code_modified": True,
+    }
+
+
+def rollback_source_patch() -> None:
+    """Restore the original CSS from its backup."""
+    if not BACKUP_CSS_PATH.is_file():
+        raise FileNotFoundError(BACKUP_CSS_PATH)
+
+    APP_CSS_PATH.write_text(
+        BACKUP_CSS_PATH.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+
+
 
 def apply_css_patch(
     html_path: Path,
