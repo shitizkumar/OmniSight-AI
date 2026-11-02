@@ -1,11 +1,66 @@
 
+import json
 import subprocess
+
+import pytest
 
 import run_pipeline
 
 
-def test_pipeline_runs_stages_in_order(monkeypatch):
+EXPECTED_STAGES = [
+    "browser_agent.checkout",
+    "vision_engine.inspect_ui",
+    "repair_engine.recommend",
+    "repair_engine.self_heal",
+    "repair_engine.browser_verifier",
+]
+
+
+def create_valid_report():
+    return {
+        "verification_method": "playwright_browser",
+        "overall_status": "passed",
+        "viewports": {
+            name: {
+                "status": "passed",
+                "checks": {
+                    "http_ok": True,
+                    "heading_visible": True,
+                    "checkout_form_visible": True,
+                    "required_fields_present": True,
+                    "submit_button_visible": True,
+                    "no_horizontal_overflow": True,
+                    "no_browser_errors": True,
+                    **(
+                        {"checkout_submission": True}
+                        if name == "mobile"
+                        else {}
+                    ),
+                },
+                "browser_errors": [],
+            }
+            for name in (
+                "mobile_small",
+                "mobile",
+                "tablet",
+                "desktop",
+            )
+        },
+    }
+
+def test_pipeline_runs_stages_in_order(monkeypatch, tmp_path):
     calls = []
+
+    monkeypatch.setattr(
+        run_pipeline,
+        "REPORT_PATH",
+        tmp_path / "browser_verification_report.json",
+    )
+
+    run_pipeline.REPORT_PATH.write_text(
+        json.dumps(create_valid_report()),
+        encoding="utf-8",
+    )
 
     def fake_run(command, cwd, check):
         calls.append(command)
@@ -16,12 +71,7 @@ def test_pipeline_runs_stages_in_order(monkeypatch):
     result = run_pipeline.main()
 
     assert result == 0
-    assert [call[-1] for call in calls] == [
-        "browser_agent.checkout",
-        "vision_engine.inspect_ui",
-        "repair_engine.recommend",
-        "repair_engine.self_heal",
-    ]
+    assert [call[-1] for call in calls] == EXPECTED_STAGES
 
 
 def test_pipeline_stops_when_a_stage_fails(monkeypatch, capsys):
@@ -48,9 +98,49 @@ def test_run_stage_reports_failure(monkeypatch):
 
     monkeypatch.setattr(run_pipeline.subprocess, "run", fake_run)
 
-    try:
+    with pytest.raises(RuntimeError, match="exit code 2"):
         run_pipeline.run_stage("Test stage", "test.module")
-    except RuntimeError as exc:
-        assert "exit code 2" in str(exc)
-    else:
-        raise AssertionError("Expected run_stage to raise RuntimeError.")
+
+
+def test_browser_report_rejects_failed_status(monkeypatch, tmp_path):
+    report_path = tmp_path / "report.json"
+    report = create_valid_report()
+    report["overall_status"] = "failed"
+
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    monkeypatch.setattr(run_pipeline, "REPORT_PATH", report_path)
+
+    with pytest.raises(RuntimeError, match="did not pass"):
+        run_pipeline.validate_browser_report()
+
+
+def test_browser_report_rejects_missing_file(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        run_pipeline,
+        "REPORT_PATH",
+        tmp_path / "missing.json",
+    )
+
+    with pytest.raises(RuntimeError, match="missing"):
+        run_pipeline.validate_browser_report()
+
+
+def test_browser_report_rejects_invalid_json(monkeypatch, tmp_path):
+    report_path = tmp_path / "report.json"
+    report_path.write_text("{invalid json", encoding="utf-8")
+    monkeypatch.setattr(run_pipeline, "REPORT_PATH", report_path)
+
+    with pytest.raises(RuntimeError, match="invalid"):
+        run_pipeline.validate_browser_report()
+
+
+def test_browser_report_rejects_failed_viewport(monkeypatch, tmp_path):
+    report_path = tmp_path / "report.json"
+    report = create_valid_report()
+    report["viewports"]["tablet"]["status"] = "failed"
+
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    monkeypatch.setattr(run_pipeline, "REPORT_PATH", report_path)
+
+    with pytest.raises(RuntimeError, match="tablet"):
+        run_pipeline.validate_browser_report()

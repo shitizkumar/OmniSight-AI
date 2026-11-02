@@ -3,13 +3,19 @@ import subprocess
 import sys
 from pathlib import Path
 
+from github_integration.verification import (
+    validate_browser_report as validate_report,
+)
+
 ROOT_DIR = Path(__file__).resolve().parent
+REPORT_PATH = ROOT_DIR / "artifacts" / "browser_verification_report.json"
 
 STAGES = [
     ("Checkout capture", "browser_agent.checkout"),
     ("UI inspection", "vision_engine.inspect_ui"),
     ("Repair recommendations", "repair_engine.recommend"),
     ("Self-healing verification", "repair_engine.self_heal"),
+    ("React browser verification", "repair_engine.browser_verifier"),
 ]
 
 
@@ -30,12 +36,22 @@ def run_stage(name: str, module: str) -> None:
     print(f"{name}: completed", flush=True)
 
 
+def validate_browser_report() -> None:
+    """Validate the browser report using the shared verification gate."""
+    validate_report(REPORT_PATH)
+    print("Browser verification report: validated", flush=True)
+
+
 def main() -> int:
     try:
         for name, module in STAGES:
             run_stage(name, module)
-    except RuntimeError as exc:
-        print(f"\nPipeline stopped: {exc}", file=sys.stderr)
+
+            if module == "repair_engine.browser_verifier":
+                validate_browser_report()
+
+    except RuntimeError as error:
+        print(f"\nPipeline stopped: {error}", file=sys.stderr)
         return 1
 
     print("\nPipeline completed successfully.", flush=True)

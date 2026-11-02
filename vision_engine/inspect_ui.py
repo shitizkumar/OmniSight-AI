@@ -112,14 +112,21 @@ def inspect_locally() -> dict:
         finally:
             browser.close()
 
+        severity_summary = {
+        severity: sum(
+            defect["severity"] == severity for defect in defects
+        )
+        for severity in ("critical", "high", "medium", "low")
+    }
+
     return {
         "inspection_status": "completed",
         "inspection_method": "local_html_checks",
         "ai_vision_used": False,
         "defects_found": len(defects),
+        "severity_summary": severity_summary,
         "defects": defects,
     }
-
 
 if __name__ == "__main__":
     print(json.dumps(inspect_html(), indent=2))
