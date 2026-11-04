@@ -1,3 +1,4 @@
+
 """Real-browser verification for the OmniSight React application."""
 
 from __future__ import annotations
@@ -5,6 +6,7 @@ from __future__ import annotations
 import json
 import subprocess
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.request import urlopen
@@ -46,15 +48,17 @@ def verify_checkout() -> dict:
 
     url = "http://127.0.0.1:4173"
     command = "npm.cmd run dev -- --host 127.0.0.1 --port 4173 --strictPort"
+
     server = subprocess.Popen(
-    command,
-    cwd=APP_DIR,
-    stdout=subprocess.DEVNULL,
-    stderr=subprocess.DEVNULL,
-    shell=True,
-)
+        command,
+        cwd=APP_DIR,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        shell=True,
+    )
 
     report = {
+        "run_id": str(uuid.uuid4()),
         "verification_method": "playwright_browser",
         "url": url,
         "verified_at": datetime.now(timezone.utc).isoformat(),
@@ -73,7 +77,10 @@ def verify_checkout() -> dict:
                     page = browser.new_page(viewport=viewport)
                     errors = []
 
-                    page.on("pageerror", lambda error: errors.append(str(error)))
+                    page.on(
+                        "pageerror",
+                        lambda error: errors.append(str(error)),
+                    )
 
                     response = page.goto(
                         url,
@@ -84,7 +91,9 @@ def verify_checkout() -> dict:
                     page.locator("h1").wait_for()
 
                     page_checks = {
-                        "http_ok": bool(response and response.status == 200),
+                        "http_ok": bool(
+                            response and response.status == 200
+                        ),
                         "heading_visible": page.get_by_role(
                             "heading",
                             name="Everyday Backpack",

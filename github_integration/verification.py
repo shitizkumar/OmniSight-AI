@@ -1,4 +1,6 @@
+
 import json
+import uuid
 from pathlib import Path
 
 EXPECTED_VIEWPORTS = {
@@ -19,7 +21,10 @@ REQUIRED_CHECKS = {
 }
 
 
-def validate_browser_report(report_path: Path) -> dict:
+def validate_browser_report(
+    report_path: Path,
+    expected_run_id: str | None = None,
+) -> dict:
     """Validate a real Playwright browser verification report."""
 
     if not report_path.is_file():
@@ -34,6 +39,16 @@ def validate_browser_report(report_path: Path) -> dict:
 
     if not isinstance(report, dict):
         raise RuntimeError("Browser verification report must be a JSON object.")
+
+    run_id = report.get("run_id")
+
+    try:
+        uuid.UUID(run_id)
+    except (ValueError, TypeError, AttributeError):
+        raise RuntimeError("Browser verification report has an invalid run ID.")
+
+    if expected_run_id is not None and run_id != expected_run_id:
+        raise RuntimeError("Browser verification report is stale.")
 
     if report.get("verification_method") != "playwright_browser":
         raise RuntimeError("Report is not from Playwright browser verification.")

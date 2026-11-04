@@ -1,5 +1,6 @@
 
 import json
+import uuid
 
 import pytest
 
@@ -8,6 +9,7 @@ from github_integration import pull_request
 
 def create_valid_report():
     return {
+        "run_id": str(uuid.uuid4()),
         "verification_method": "playwright_browser",
         "overall_status": "passed",
         "viewports": {
@@ -93,10 +95,9 @@ def setup_pr_environment(monkeypatch, tmp_path):
 
     report_path = project_root / "artifacts" / "browser_verification_report.json"
     report_path.parent.mkdir(parents=True)
-    report_path.write_text(
-        json.dumps(create_valid_report()),
-        encoding="utf-8",
-    )
+
+    report = create_valid_report()
+    report_path.write_text(json.dumps(report), encoding="utf-8")
 
     monkeypatch.setattr(pull_request, "ROOT_DIR", project_root)
     monkeypatch.setattr(pull_request, "REPORT_PATH", report_path)
@@ -109,17 +110,18 @@ def setup_pr_environment(monkeypatch, tmp_path):
         lambda auth: fake_github,
     )
 
-    return fake_github, report_path
+    return fake_github, report_path, report["run_id"]
 
 
 def test_valid_report_allows_pull_request(setup_pr_environment):
-    fake_github, _ = setup_pr_environment
+    fake_github, _, run_id = setup_pr_environment
 
     url = pull_request.create_pull_request(
         "mock-store/src/App.css",
         "Update CSS",
         "UI repair",
         "Browser verification passed.",
+        expected_run_id=run_id,
     )
 
     assert url == "https://github.com/example/pull/1"
@@ -147,9 +149,10 @@ def test_invalid_verification_blocks_github(
     report_change,
     error_message,
 ):
-    fake_github, report_path = setup_pr_environment
+    fake_github, report_path, run_id = setup_pr_environment
 
     report = create_valid_report()
+    report["run_id"] = run_id
     report_change(report)
     report_path.write_text(json.dumps(report), encoding="utf-8")
 
@@ -165,11 +168,31 @@ def test_invalid_verification_blocks_github(
             "Update CSS",
             "UI repair",
             "Test PR",
+            expected_run_id=run_id,
+        )
+
+
+def test_stale_report_blocks_github(setup_pr_environment, monkeypatch):
+    _, report_path, _ = setup_pr_environment
+
+    monkeypatch.setattr(
+        pull_request,
+        "Github",
+        lambda auth: pytest.fail("GitHub must not be contacted."),
+    )
+
+    with pytest.raises(RuntimeError, match="stale"):
+        pull_request.create_pull_request(
+            "mock-store/src/App.css",
+            "Update CSS",
+            "UI repair",
+            "Test PR",
+            expected_run_id=str(uuid.uuid4()),
         )
 
 
 def test_missing_report_blocks_github(setup_pr_environment, monkeypatch):
-    fake_github, report_path = setup_pr_environment
+    _, report_path, run_id = setup_pr_environment
     report_path.unlink()
 
     monkeypatch.setattr(
@@ -184,13 +207,12 @@ def test_missing_report_blocks_github(setup_pr_environment, monkeypatch):
             "Update CSS",
             "UI repair",
             "Test PR",
+            expected_run_id=run_id,
         )
 
 
-def test_no_source_changes_does_not_create_branch(
-    setup_pr_environment,
-):
-    fake_github, _ = setup_pr_environment
+def test_no_source_changes_does_not_create_branch(setup_pr_environment):
+    fake_github, _, run_id = setup_pr_environment
     source_file = (
         pull_request.ROOT_DIR / "mock-store" / "src" / "App.css"
     )
@@ -202,6 +224,7 @@ def test_no_source_changes_does_not_create_branch(
             "Update CSS",
             "UI repair",
             "Test PR",
+            expected_run_id=run_id,
         )
 
     assert fake_github.repo.branch_created is False

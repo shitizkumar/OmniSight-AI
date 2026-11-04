@@ -36,19 +36,30 @@ def run_stage(name: str, module: str) -> None:
     print(f"{name}: completed", flush=True)
 
 
-def validate_browser_report() -> None:
-    """Validate the browser report using the shared verification gate."""
-    validate_report(REPORT_PATH)
-    print("Browser verification report: validated", flush=True)
+def validate_browser_report() -> str:
+    """Validate and return the current browser verification run ID."""
+    report = validate_report(REPORT_PATH)
+    run_id = report["run_id"]
+
+    print(
+        f"Browser verification report validated. Run ID: {run_id}",
+        flush=True,
+    )
+    return run_id
 
 
 def main() -> int:
     try:
+        latest_run_id = None
+
         for name, module in STAGES:
             run_stage(name, module)
 
             if module == "repair_engine.browser_verifier":
-                validate_browser_report()
+                latest_run_id = validate_browser_report()
+
+        if latest_run_id is None:
+            raise RuntimeError("Browser verification did not run.")
 
     except RuntimeError as error:
         print(f"\nPipeline stopped: {error}", file=sys.stderr)

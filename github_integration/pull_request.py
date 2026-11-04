@@ -22,10 +22,14 @@ def create_pull_request(
     commit_message: str,
     pr_title: str,
     pr_body: str,
+    expected_run_id: str,
 ) -> str:
-    """Create a GitHub PR only after real browser verification passes."""
+    """Create a GitHub PR only after the expected browser run passes."""
 
-    validate_browser_report(REPORT_PATH)
+    validate_browser_report(
+        REPORT_PATH,
+        expected_run_id=expected_run_id,
+    )
 
     if file_path not in ALLOWED_FILES:
         raise ValueError("File is not approved for automated commits.")
@@ -49,7 +53,6 @@ def create_pull_request(
     try:
         repo = github.get_repo(REPOSITORY)
         main = repo.get_branch("main")
-
         remote_file = repo.get_contents(file_path, ref="main")
 
         if remote_file.decoded_content.decode("utf-8") == content:

@@ -1,6 +1,7 @@
 
 import json
 import subprocess
+import uuid
 
 import pytest
 
@@ -18,6 +19,7 @@ EXPECTED_STAGES = [
 
 def create_valid_report():
     return {
+        "run_id": str(uuid.uuid4()),
         "verification_method": "playwright_browser",
         "overall_status": "passed",
         "viewports": {
@@ -47,6 +49,7 @@ def create_valid_report():
             )
         },
     }
+
 
 def test_pipeline_runs_stages_in_order(monkeypatch, tmp_path):
     calls = []
@@ -143,4 +146,16 @@ def test_browser_report_rejects_failed_viewport(monkeypatch, tmp_path):
     monkeypatch.setattr(run_pipeline, "REPORT_PATH", report_path)
 
     with pytest.raises(RuntimeError, match="tablet"):
+        run_pipeline.validate_browser_report()
+
+
+def test_browser_report_rejects_invalid_run_id(monkeypatch, tmp_path):
+    report_path = tmp_path / "report.json"
+    report = create_valid_report()
+    report["run_id"] = "invalid-id"
+
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    monkeypatch.setattr(run_pipeline, "REPORT_PATH", report_path)
+
+    with pytest.raises(RuntimeError, match="invalid run ID"):
         run_pipeline.validate_browser_report()
