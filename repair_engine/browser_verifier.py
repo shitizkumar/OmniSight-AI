@@ -1,8 +1,4 @@
 
-"""Real-browser verification for the OmniSight React application."""
-
-from __future__ import annotations
-
 import json
 import subprocess
 import time
@@ -26,6 +22,14 @@ VIEWPORTS = {
     "desktop": {"width": 1440, "height": 900},
 }
 
+FOCUS_SELECTORS = {
+    "product": ".product",
+    "checkout_form": ".checkout-form",
+    "quantity": "#quantity",
+    "submit_button": 'button[type="submit"]',
+    "address_fields": ".field-row",
+}
+
 
 def wait_for_server(url: str, process: subprocess.Popen) -> None:
     """Wait until the Vite development server responds."""
@@ -40,6 +44,33 @@ def wait_for_server(url: str, process: subprocess.Popen) -> None:
             time.sleep(0.5)
 
     raise TimeoutError("Vite server did not start within 20 seconds.")
+
+
+
+def capture_component_boxes(page) -> dict:
+    """Capture component coordinates relative to the full-page screenshot."""
+    components = {}
+    scroll_y = page.evaluate("window.scrollY")
+
+    for name, selector in FOCUS_SELECTORS.items():
+        locator = page.locator(selector).first
+
+        if locator.count() == 0 or not locator.is_visible():
+            continue
+
+        box = locator.bounding_box()
+
+        if not box:
+            continue
+
+        components[name] = {
+            "x": round(box["x"]),
+            "y": round(box["y"] + scroll_y),
+            "width": round(box["width"]),
+            "height": round(box["height"]),
+        }
+
+    return components
 
 
 def verify_checkout() -> dict:
@@ -112,7 +143,7 @@ def verify_checkout() -> dict:
                             )
                         ),
                         "submit_button_visible": page.locator(
-                            "button[type='submit']"
+                            'button[type="submit"]'
                         ).is_visible(),
                     }
 
@@ -134,11 +165,17 @@ def verify_checkout() -> dict:
                         page.locator("#address").fill("Test Street")
                         page.locator("#city").fill("Delhi")
                         page.locator("#postalCode").fill("110001")
-                        page.locator("button[type='submit']").click()
+                        page.locator('button[type="submit"]').click()
 
                         page_checks["checkout_submission"] = (
                             page.get_by_role("status").is_visible()
                         )
+
+                    component_boxes = (
+                        capture_component_boxes(page)
+                        if name == "mobile"
+                        else {}
+                    )
 
                     screenshot_path = (
                         ARTIFACTS_DIR / f"browser_{name}.png"
@@ -147,6 +184,7 @@ def verify_checkout() -> dict:
                     page.screenshot(
                         path=str(screenshot_path),
                         full_page=True,
+                        animations="disabled",
                     )
 
                     page_checks["no_browser_errors"] = not errors
@@ -158,6 +196,7 @@ def verify_checkout() -> dict:
                         "checks": page_checks,
                         "browser_errors": errors,
                         "screenshot": str(screenshot_path),
+                        "component_boxes": component_boxes,
                         "status": "passed" if passed else "failed",
                     }
 
