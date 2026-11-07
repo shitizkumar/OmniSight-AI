@@ -1,4 +1,7 @@
 
+"""Browser verification for local checkout and external websites."""
+
+import argparse
 import json
 import subprocess
 import time
@@ -7,7 +10,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.request import urlopen
 
+from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import sync_playwright
+
+from browser_agent.website_capture import (
+    check_request_destination,
+    validate_public_url,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -46,7 +55,6 @@ def wait_for_server(url: str, process: subprocess.Popen) -> None:
     raise TimeoutError("Vite server did not start within 20 seconds.")
 
 
-
 def capture_component_boxes(page) -> dict:
     """Capture component coordinates relative to the full-page screenshot."""
     components = {}
@@ -73,8 +81,141 @@ def capture_component_boxes(page) -> dict:
     return components
 
 
+def verify_website(
+    url: str,
+    output_dir: Path,
+    run_id: str | None = None,
+) -> dict:
+    """Verify an external website without modifying it."""
+    validate_public_url(url)
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    run_id = run_id or uuid.uuid4().hex
+
+    report = {
+        "run_id": run_id,
+        "verification_method": "read_only_playwright",
+        "url": url,
+        "verified_at": datetime.now(timezone.utc).isoformat(),
+        "viewports": {},
+        "overall_status": "failed",
+    }
+
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+
+            try:
+                for name, viewport in VIEWPORTS.items():
+                    context = browser.new_context(
+                        viewport=viewport,
+                        device_scale_factor=1,
+                    )
+                    page = context.new_page()
+                    errors = []
+
+                    page.on(
+                        "pageerror",
+                        lambda error: errors.append(str(error)),
+                    )
+
+                    page.route("**/*", check_request_destination)
+
+                    try:
+                        response = page.goto(
+                            url,
+                            wait_until="domcontentloaded",
+                            timeout=30_000,
+                        )
+
+                        try:
+                            page.wait_for_load_state(
+                                "networkidle",
+                                timeout=5_000,
+                            )
+                        except PlaywrightError:
+                            pass
+
+                        dimensions = page.evaluate("""() => ({
+                            viewport_width: document.documentElement.clientWidth,
+                            page_width: document.documentElement.scrollWidth,
+                            viewport_height: document.documentElement.clientHeight,
+                            page_height: document.documentElement.scrollHeight
+                        })""")
+
+                        screenshot_path = (
+                            output_dir / f"verification_{name}.png"
+                        )
+
+                        page.screenshot(
+                            path=str(screenshot_path),
+                            full_page=True,
+                            animations="disabled",
+                            timeout=30_000,
+                        )
+
+                        checks = {
+                            "http_ok": bool(
+                                response and response.status == 200
+                            ),
+                            "title_present": bool(page.title().strip()),
+                            "no_horizontal_overflow": (
+                                dimensions["page_width"]
+                                <= dimensions["viewport_width"]
+                            ),
+                            "no_browser_errors": not errors,
+                        }
+
+                        passed = all(checks.values())
+
+                        report["viewports"][name] = {
+                            "dimensions": viewport,
+                            "http_status": (
+                                response.status if response else None
+                            ),
+                            "title": page.title(),
+                            "final_url": page.url,
+                            "checks": checks,
+                            "page_dimensions": dimensions,
+                            "browser_errors": errors,
+                            "screenshot": str(
+                                screenshot_path.resolve()
+                            ),
+                            "status": "passed" if passed else "failed",
+                        }
+
+                    finally:
+                        context.close()
+
+            finally:
+                browser.close()
+
+        report["overall_status"] = (
+            "passed"
+            if len(report["viewports"]) == len(VIEWPORTS)
+            and all(
+                result["status"] == "passed"
+                for result in report["viewports"].values()
+            )
+            else "failed"
+        )
+
+    except Exception as error:
+        report["error"] = str(error)
+
+    report_path = output_dir / "browser_verification_report.json"
+    report_path.write_text(
+        json.dumps(report, indent=4),
+        encoding="utf-8",
+    )
+
+    return report
+
+
 def verify_checkout() -> dict:
-    """Verify the real React application across multiple viewports."""
+    """Verify the local React checkout across multiple viewports."""
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
 
     url = "http://127.0.0.1:4173"
@@ -226,6 +367,7 @@ def verify_checkout() -> dict:
             server.kill()
             server.wait()
 
+        REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
         REPORT_PATH.write_text(
             json.dumps(report, indent=4),
             encoding="utf-8",
@@ -234,9 +376,32 @@ def verify_checkout() -> dict:
     return report
 
 
-if __name__ == "__main__":
-    result = verify_checkout()
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Run OmniSight browser verification."
+    )
+    parser.add_argument("--url")
+    parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--run-id")
+    args = parser.parse_args()
+
+    if args.url:
+        if args.output_dir is None:
+            parser.error("--output-dir is required with --url")
+
+        result = verify_website(
+            args.url,
+            args.output_dir,
+            args.run_id,
+        )
+    else:
+        result = verify_checkout()
+
     print(json.dumps(result, indent=4))
 
     if result["overall_status"] != "passed":
         raise SystemExit(1)
+
+
+if __name__ == "__main__":
+    main()

@@ -55,3 +55,64 @@ def test_invalid_build_status_is_rejected():
     )
 
     assert response.status_code == 422
+def test_url_repair_requires_qa_approval(tmp_path, monkeypatch):
+    from backend import webhook
+
+    monkeypatch.setattr(webhook, "WEBSITE_RUNS_DIR", tmp_path)
+
+    run_id = "2a22444ad7294a3394e4e91028720e2"
+    run_dir = tmp_path / run_id
+    run_dir.mkdir()
+
+    response = client.post(
+        "/api/qa/repair",
+        json={
+            "run_id": run_id,
+            "css_patch": "body { overflow-x: hidden; }",
+        },
+    )
+
+    assert response.status_code == 403
+
+
+def test_url_repair_rejects_missing_overflow_defect(tmp_path, monkeypatch):
+    import json
+    from backend import webhook
+
+    monkeypatch.setattr(webhook, "WEBSITE_RUNS_DIR", tmp_path)
+
+    run_id = "2a22444ad7294a3394e4e91028720e2"
+    run_dir = tmp_path / run_id
+    run_dir.mkdir()
+
+    reports = {
+        "qa_decision.json": {
+            "run_id": run_id,
+            "decision": "approved",
+        },
+        "capture_report.json": {
+            "run_id": run_id,
+        },
+        "ui_inspection_report.json": {
+            "run_id": run_id,
+            "defects": [],
+        },
+    }
+
+    for filename, data in reports.items():
+        (run_dir / filename).write_text(json.dumps(data), encoding="utf-8")
+
+    (run_dir / "website.html").write_text(
+        "<html><body>Test page</body></html>",
+        encoding="utf-8",
+    )
+
+    response = client.post(
+        "/api/qa/repair",
+        json={
+            "run_id": run_id,
+            "css_patch": "body { overflow-x: hidden; }",
+        },
+    )
+
+    assert response.status_code == 409

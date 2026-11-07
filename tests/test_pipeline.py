@@ -1,4 +1,4 @@
-
+﻿
 import json
 import subprocess
 import uuid
@@ -71,7 +71,7 @@ def test_pipeline_runs_stages_in_order(monkeypatch, tmp_path):
 
     monkeypatch.setattr(run_pipeline.subprocess, "run", fake_run)
 
-    result = run_pipeline.main()
+    result = run_pipeline.main([])
 
     assert result == 0
     assert [call[-1] for call in calls] == EXPECTED_STAGES
@@ -86,7 +86,7 @@ def test_pipeline_stops_when_a_stage_fails(monkeypatch, capsys):
 
     monkeypatch.setattr(run_pipeline.subprocess, "run", fake_run)
 
-    result = run_pipeline.main()
+    result = run_pipeline.main([])
     output = capsys.readouterr()
 
     assert result == 1

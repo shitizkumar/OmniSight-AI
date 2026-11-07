@@ -1,8 +1,13 @@
+
+"""Generate UI repair recommendations for OmniSight-AI."""
+
+import argparse
 import json
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 ARTIFACTS_DIR = ROOT_DIR / "artifacts"
+
 REPORT_PATH = ARTIFACTS_DIR / "ui_inspection_report.json"
 OUTPUT_PATH = ARTIFACTS_DIR / "repair_recommendations.json"
 
@@ -16,6 +21,9 @@ def generate_recommendations(report: dict) -> dict:
     recommendations = []
 
     for defect in report["defects"]:
+        if not isinstance(defect, dict):
+            raise ValueError("Each defect must be a JSON object.")
+
         issue = defect.get("issue", "").lower()
 
         if "overflow" in issue:
@@ -46,17 +54,46 @@ def generate_recommendations(report: dict) -> dict:
     }
 
 
-def main() -> None:
-    if not REPORT_PATH.exists():
-        raise FileNotFoundError(f"Inspection report not found: {REPORT_PATH}")
+def create_recommendation_report(
+    report_path: Path,
+    output_path: Path,
+) -> dict:
+    """Read an inspection report and save its recommendations."""
+    report_path = Path(report_path)
+    output_path = Path(output_path)
 
-    report = json.loads(REPORT_PATH.read_text(encoding="utf-8"))
+    if not report_path.is_file():
+        raise FileNotFoundError(
+            f"Inspection report not found: {report_path}"
+        )
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
     result = generate_recommendations(report)
 
-    ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
-    OUTPUT_PATH.write_text(json.dumps(result, indent=2), encoding="utf-8")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
+        json.dumps(result, indent=2),
+        encoding="utf-8",
+    )
+
+    return result
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Generate UI repair recommendations."
+    )
+    parser.add_argument("--input", type=Path, default=REPORT_PATH)
+    parser.add_argument("--output", type=Path, default=OUTPUT_PATH)
+    args = parser.parse_args()
+
+    result = create_recommendation_report(
+        args.input,
+        args.output,
+    )
+
     print(json.dumps(result, indent=2))
-    print(f"\nRecommendations saved to: {OUTPUT_PATH}")
+    print(f"\nRecommendations saved to: {args.output}")
 
 
 if __name__ == "__main__":

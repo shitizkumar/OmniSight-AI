@@ -1,17 +1,29 @@
-
+﻿
 import { useCallback, useEffect, useState } from "react";
 import "./App.css";
 
 const API_URL = "http://127.0.0.1:8000";
+const POLL_INTERVAL = 2000;
+const MAX_POLLS = 150;
+
+const SCREENSHOTS = [
+  "mobile_small.png",
+  "mobile.png",
+  "tablet.png",
+  "desktop.png",
+  "verification_mobile_small.png",
+  "verification_mobile.png",
+  "verification_tablet.png",
+  "verification_desktop.png",
+];
 
 function formatDate(value) {
   if (!value) return "Not available";
-
   return new Date(value).toLocaleString();
 }
 
 function Status({ value }) {
-  const passed = value === "passed";
+  const passed = value === "passed" || value === "completed";
 
   return (
     <span className={`status ${passed ? "success" : "failed"}`}>
@@ -26,6 +38,17 @@ function App() {
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
+
+  const [websiteUrl, setWebsiteUrl] = useState("");
+  const [websiteJob, setWebsiteJob] = useState(null);
+  const [websiteData, setWebsiteData] = useState(null);
+  const [inspecting, setInspecting] = useState(false);
+  const [websiteError, setWebsiteError] = useState("");
+  const [pollCount, setPollCount] = useState(0);
+  const [repairCss, setRepairCss] = useState("");
+  const [repairing, setRepairing] = useState(false);
+  const [repairError, setRepairError] = useState("");
+  const [repairResult, setRepairResult] = useState(null);
 
   const loadReports = useCallback(async () => {
     try {
@@ -49,11 +72,103 @@ function App() {
     loadReports();
   }, [loadReports]);
 
-  async function submitDecision(decision) {
-    const runId = reports?.browser?.run_id;
+  // Poll the backend while a website inspection is queued or running.
+  useEffect(() => {
+    const jobId = websiteJob?.job_id;
+    const status = websiteJob?.status;
 
+    if (!jobId || !["queued", "running"].includes(status)) return;
+
+    if (pollCount >= MAX_POLLS) {
+      setWebsiteError("Inspection timed out. Check the backend logs.");
+      setWebsiteJob((current) => ({
+        ...current,
+        status: "timeout",
+      }));
+      setInspecting(false);
+      return;
+    }
+
+    const timer = window.setTimeout(async () => {
+      try {
+        const response = await fetch(
+          `${API_URL}/api/qa/runs/${encodeURIComponent(jobId)}`
+        );
+
+        const result = await response.json();
+
+        if (!response.ok) {
+          throw new Error(result.detail || "Unable to retrieve inspection status.");
+        }
+
+        const job = result.job || {};
+
+        setWebsiteJob(job);
+        setWebsiteData(result);
+        setPollCount((count) => count + 1);
+
+        if (["completed", "failed"].includes(job.status)) {
+          setInspecting(false);
+
+          if (job.status === "failed") {
+            setWebsiteError(job.error || "Website inspection failed.");
+          }
+        }
+      } catch (err) {
+        setWebsiteError(err.message || "Unable to check inspection status.");
+        setInspecting(false);
+      }
+    }, POLL_INTERVAL);
+
+    return () => window.clearTimeout(timer);
+  }, [websiteJob, pollCount]);
+
+  async function inspectWebsite(event) {
+    event.preventDefault();
+
+    const url = websiteUrl.trim();
+
+    if (!url) {
+      setWebsiteError("Enter a website URL first.");
+      return;
+    }
+
+    try {
+      setInspecting(true);
+      setWebsiteError("");
+      setMessage("");
+      setWebsiteData(null);
+      setWebsiteJob(null);
+      setPollCount(0);
+      setRepairResult(null);
+      setRepairError("");
+      setRepairCss("");
+
+      const response = await fetch(`${API_URL}/api/qa/inspect`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ url }),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.detail || "Unable to start website inspection.");
+      }
+
+      setWebsiteJob(result);
+      setMessage("Website inspection started.");
+    } catch (err) {
+      setWebsiteError(err.message || "Unable to start inspection.");
+      setInspecting(false);
+    }
+  }
+
+  async function submitDecision(decision, runId) {
     if (!runId) {
-      setMessage("No browser run is available for review.");
+      setMessage("No completed run is available for review.");
       return;
     }
 
@@ -85,7 +200,20 @@ function App() {
       }
 
       setMessage(`QA decision ${decision} successfully.`);
-      await loadReports();
+
+      if (websiteJob?.job_id && websiteData) {
+        const updated = await fetch(
+          `${API_URL}/api/qa/runs/${encodeURIComponent(websiteJob.job_id)}`
+        );
+
+        if (updated.ok) {
+          const updatedData = await updated.json();
+          setWebsiteData(updatedData);
+          setWebsiteJob(updatedData.job || null);
+        }
+      } else {
+        await loadReports();
+      }
     } catch (err) {
       setMessage(err.message);
     } finally {
@@ -93,22 +221,80 @@ function App() {
     }
   }
 
+  async function previewApprovedRepair() {
+    if (!runId || !jobId || !repairCss.trim()) return;
+
+    try {
+      setRepairing(true);
+      setRepairError("");
+      setRepairResult(null);
+
+      const response = await fetch(`${API_URL}/api/qa/repair`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          run_id: runId,
+          css_patch: repairCss.trim(),
+          viewport_width: 320,
+          viewport_height: 720,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.detail || "Unable to generate repair preview.");
+      }
+
+      setRepairResult(result);
+    } catch (err) {
+      setRepairError(err.message || "Repair preview failed.");
+    } finally {
+      setRepairing(false);
+    }
+  }
+
   if (loading) {
     return <main className="loading">Loading OmniSight QA reports...</main>;
   }
 
-  const browser = reports?.browser || {};
-  const inspection = reports?.inspection || {};
-  const recommendations = reports?.recommendations || {};
+  const isWebsiteRun = Boolean(websiteData);
+  const activeData = websiteData?.reports || websiteData || reports || {};
+
+  const browser = activeData.verification || activeData.browser || {};
+  const inspection = activeData.inspection || {};
+  const recommendations = activeData.recommendations || {};
   const viewports = browser.viewports || {};
   const defects = inspection.defects || [];
   const fixes = recommendations.recommendations || [];
-  const decision = reports?.decision || {};
+  const decision = activeData.decision || {};
+  const hasOverflowDefect = defects.some((defect) =>
+    `${defect.issue || ""} ${defect.element || ""} ${defect.evidence || ""}`
+      .toLowerCase()
+      .includes("overflow")
+  );
 
   const viewportList = Object.entries(viewports);
   const passedCount = viewportList.filter(
     ([, item]) => item.status === "passed"
   ).length;
+
+  const jobId = websiteJob?.job_id;
+  const runId = websiteData?.job?.run_id || websiteData?.run_id || browser.run_id;
+  const screenshotBase = jobId
+    ? `${API_URL}/api/qa/runs/${encodeURIComponent(jobId)}/screenshots`
+    : "";
+  const canRepair = Boolean(
+    runId &&
+    jobId &&
+    decision.decision === "approved" &&
+    hasOverflowDefect
+  );
+  const repairPreviewBase = jobId
+    ? `${API_URL}/api/qa/runs/${encodeURIComponent(jobId)}/repair-preview`
+    : "";
 
   return (
     <main className="dashboard">
@@ -122,11 +308,13 @@ function App() {
         </div>
 
         <nav>
-          <a href="#overview" className="active">▦ Overview</a>
-          <a href="#viewports">◫ Viewport tests</a>
-          <a href="#inspection">⌕ UI inspection</a>
-          <a href="#recommendations">⚙ Recommendations</a>
-          <a href="#approval">✓ QA approval</a>
+          <a href="#overview" className="active">Overview</a>
+          <a href="#website-inspection">Website inspection</a>
+          <a href="#viewports">Viewport tests</a>
+          <a href="#screenshots">Screenshots</a>
+          <a href="#inspection">UI inspection</a>
+          <a href="#recommendations">Recommendations</a>
+          <a href="#approval">QA approval</a>
         </nav>
 
         <div className="sidebar-footer">
@@ -144,7 +332,7 @@ function App() {
           </div>
 
           <button className="refresh-btn" onClick={loadReports}>
-            ↻ Refresh reports
+            Refresh reports
           </button>
         </header>
 
@@ -156,6 +344,66 @@ function App() {
         )}
 
         {message && <div className="alert">{message}</div>}
+
+        <section id="website-inspection" className="panel website-panel">
+          <div className="section-heading">
+            <div>
+              <span className="eyebrow">URL-DRIVEN AUTOMATION</span>
+              <h2>Inspect a website</h2>
+            </div>
+            <Status value={websiteJob?.status || "idle"} />
+          </div>
+
+          <form className="url-form" onSubmit={inspectWebsite}>
+            <input
+              type="url"
+              value={websiteUrl}
+              onChange={(event) => setWebsiteUrl(event.target.value)}
+              placeholder="https://example.com"
+              aria-label="Website URL"
+              required
+            />
+            <button
+              className="inspect-btn"
+              type="submit"
+              disabled={inspecting}
+            >
+              {inspecting ? "Inspecting..." : "Inspect website"}
+            </button>
+          </form>
+
+          <p className="muted">
+            Runs read-only browser capture, UI inspection, repair recommendations
+            and responsive verification.
+          </p>
+
+          {websiteError && (
+            <div className="alert error-alert">{websiteError}</div>
+          )}
+
+          {websiteJob && (
+            <div className="job-status">
+              <div>
+                <strong>Inspection job</strong>
+                <code>{websiteJob.job_id || "Starting..."}</code>
+              </div>
+              <div>
+                <strong>Website</strong>
+                <span>{websiteJob.url || websiteUrl}</span>
+              </div>
+              <div>
+                <strong>Progress</strong>
+                <Status value={websiteJob.status} />
+              </div>
+              {websiteJob.run_id && (
+                <div>
+                  <strong>Run ID</strong>
+                  <code>{websiteJob.run_id}</code>
+                </div>
+              )}
+            </div>
+          )}
+        </section>
 
         <section id="overview">
           <div className="section-heading">
@@ -175,13 +423,13 @@ function App() {
 
             <article className="stat-card">
               <span>Detected defects</span>
-              <strong>{inspection.defects_found ?? "—"}</strong>
+              <strong>{inspection.defects_found ?? "N/A"}</strong>
               <small>UI inspection results</small>
             </article>
 
             <article className="stat-card">
               <span>Recommendations</span>
-              <strong>{recommendations.recommendations_count ?? "—"}</strong>
+              <strong>{recommendations.recommendations_count ?? "N/A"}</strong>
               <small>Suggested repair actions</small>
             </article>
 
@@ -204,51 +452,89 @@ function App() {
             <span className="muted">{viewportList.length} viewports</span>
           </div>
 
-          <div className="viewport-grid">
-            {viewportList.map(([name, item]) => (
-              <article className="viewport-card" key={name}>
-                <div className="viewport-top">
-                  <h3>{name.replace("_", " ")}</h3>
-                  <Status value={item.status} />
-                </div>
+          {viewportList.length === 0 ? (
+            <p className="empty-state">No viewport verification data available.</p>
+          ) : (
+            <div className="viewport-grid">
+              {viewportList.map(([name, item]) => (
+                <article className="viewport-card" key={name}>
+                  <div className="viewport-top">
+                    <h3>{name.replaceAll("_", " ")}</h3>
+                    <Status value={item.status} />
+                  </div>
 
-                <strong>
-                  {item.dimensions?.width} × {item.dimensions?.height}
-                </strong>
+                  <strong>
+                    {item.dimensions?.width} x {item.dimensions?.height}
+                  </strong>
 
-                <div className="check-list">
-                  {Object.entries(item.checks || {}).map(([check, passed]) => (
-                    <div className="check-row" key={check}>
-                      <span>{check.replaceAll("_", " ")}</span>
-                      <span className={passed ? "check-pass" : "check-fail"}>
-                        {passed ? "✓" : "✕"}
-                      </span>
-                    </div>
-                  ))}
-                </div>
+                  <div className="check-list">
+                    {Object.entries(item.checks || {}).map(([check, passed]) => (
+                      <div className="check-row" key={check}>
+                        <span>{check.replaceAll("_", " ")}</span>
+                        <span className={passed ? "check-pass" : "check-fail"}>
+                          {passed ? "PASS" : "FAIL"}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
 
-                <small className="muted">
-                  Browser errors: {item.browser_errors?.length ?? 0}
-                </small>
+                  <small className="muted">
+                    Browser errors: {item.browser_errors?.length ?? 0}
+                  </small>
 
-                {item.component_boxes &&
-                  Object.keys(item.component_boxes).length > 0 && (
-                    <details>
-                      <summary>Component coordinates</summary>
-                      {Object.entries(item.component_boxes).map(
-                        ([component, box]) => (
-                          <p key={component}>
-                            <strong>{component}</strong>: {box.x}, {box.y},
-                            {` ${box.width} × ${box.height}`}
-                          </p>
-                        )
-                      )}
-                    </details>
-                  )}
-              </article>
-            ))}
-          </div>
+                  {item.component_boxes &&
+                    Object.keys(item.component_boxes).length > 0 && (
+                      <details>
+                        <summary>Component coordinates</summary>
+                        {Object.entries(item.component_boxes).map(
+                          ([component, box]) => (
+                            <p key={component}>
+                              <strong>{component}</strong>: {box.x}, {box.y},
+                              {` ${box.width} x ${box.height}`}
+                            </p>
+                          )
+                        )}
+                      </details>
+                    )}
+                </article>
+              ))}
+            </div>
+          )}
         </section>
+
+        {isWebsiteRun && (
+          <section id="screenshots" className="panel">
+            <div className="section-heading">
+              <div>
+                <span className="eyebrow">PLAYWRIGHT CAPTURES</span>
+                <h2>Website screenshots</h2>
+              </div>
+              <span className="muted">Capture and verification</span>
+            </div>
+
+            <div className="screenshot-grid">
+              {SCREENSHOTS.map((filename) => (
+                <article className="screenshot-card" key={filename}>
+                  <h3>{filename.replaceAll("_", " ").replace(".png", "")}</h3>
+                  <a
+                    href={`${screenshotBase}/${filename}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <img
+                      src={`${screenshotBase}/${filename}`}
+                      alt={filename}
+                      loading="lazy"
+                      onError={(event) => {
+                        event.currentTarget.style.display = "none";
+                      }}
+                    />
+                  </a>
+                </article>
+              ))}
+            </div>
+          </section>
+        )}
 
         <section id="inspection" className="panel">
           <div className="section-heading">
@@ -260,7 +546,7 @@ function App() {
           </div>
 
           {defects.length === 0 ? (
-            <p className="empty-state">✓ No UI defects detected in this report.</p>
+            <p className="empty-state">No UI defects detected in this report.</p>
           ) : (
             defects.map((defect, index) => (
               <article className="issue-card" key={index}>
@@ -299,6 +585,105 @@ function App() {
           )}
         </section>
 
+        <section id="repair-preview" className="panel">
+          <div className="section-heading">
+            <div>
+              <span className="eyebrow">APPROVED URL REPAIR</span>
+              <h2>Self-healing preview</h2>
+            </div>
+            <strong>
+              {repairResult?.verification_status || "Preview pending"}
+            </strong>
+          </div>
+
+          {!hasOverflowDefect ? (
+            <p className="empty-state">
+              URL repair is unavailable because this run has no detected overflow defect.
+            </p>
+          ) : decision.decision !== "approved" ? (
+            <p className="empty-state">
+              QA approval is required before generating a repair preview.
+            </p>
+          ) : (
+            <>
+              <p>
+                Enter a CSS patch to test against the captured page at a
+                320 ? 720 viewport. This creates a temporary preview and does
+                not modify the external website or project source files.
+              </p>
+
+              <textarea
+                value={repairCss}
+                onChange={(event) => setRepairCss(event.target.value)}
+                placeholder="Example: body { overflow-x: hidden; }"
+                rows={5}
+                maxLength={10000}
+                disabled={!canRepair || repairing}
+                style={{
+                  width: "100%",
+                  boxSizing: "border-box",
+                  padding: "12px",
+                  margin: "12px 0",
+                  fontFamily: "monospace",
+                  resize: "vertical",
+                }}
+              />
+
+              <button
+                className="approve-btn"
+                onClick={previewApprovedRepair}
+                disabled={!canRepair || repairing || !repairCss.trim()}
+              >
+                {repairing ? "Generating preview..." : "Generate repair preview"}
+              </button>
+            </>
+          )}
+
+          {repairError && (
+            <p className="error-message">{repairError}</p>
+          )}
+
+          {repairResult && (
+            <div className="issue-card">
+              <h3>Repair verification: {repairResult.verification_status}</h3>
+              <p>
+                Horizontal overflow before:{" "}
+                {String(repairResult.before?.horizontal_overflow)}
+              </p>
+              <p>
+                Horizontal overflow after:{" "}
+                {String(repairResult.after?.horizontal_overflow)}
+              </p>
+              <p>
+                Source modified: {String(repairResult.source_code_modified)}
+              </p>
+              <p>
+                External website modified:{" "}
+                {String(repairResult.external_website_modified)}
+              </p>
+
+              <div className="screenshot-grid">
+                <article className="screenshot-card">
+                  <h3>Before repair</h3>
+                  <img
+                    src={`${repairPreviewBase}/url_repair_before.png`}
+                    alt="Website before repair"
+                    loading="lazy"
+                  />
+                </article>
+                <article className="screenshot-card">
+                  <h3>After repair</h3>
+                  <img
+                    src={`${repairPreviewBase}/url_repair_after.png`}
+                    alt="Website after repair"
+                    loading="lazy"
+                  />
+                </article>
+              </div>
+            </div>
+          )}
+        </section>
+
         <section id="approval" className="panel approval-panel">
           <span className="eyebrow">HUMAN-IN-THE-LOOP</span>
           <h2>QA manager decision</h2>
@@ -309,7 +694,7 @@ function App() {
 
           <div className="run-details">
             <span>Run ID</span>
-            <code>{browser.run_id || "No run available"}</code>
+            <code>{runId || "No run available"}</code>
 
             <span>Verified at</span>
             <strong>{formatDate(browser.verified_at)}</strong>
@@ -321,31 +706,31 @@ function App() {
           <div className="decision-actions">
             <button
               className="approve-btn"
-              disabled={saving || !browser.run_id}
-              onClick={() => submitDecision("approved")}
+              disabled={saving || !runId || inspecting}
+              onClick={() => submitDecision("approved", runId)}
             >
-              ✓ Approve
+              Approve
             </button>
 
             <button
               className="reject-btn"
-              disabled={saving || !browser.run_id}
-              onClick={() => submitDecision("rejected")}
+              disabled={saving || !runId || inspecting}
+              onClick={() => submitDecision("rejected", runId)}
             >
-              ✕ Reject
+              Reject
             </button>
           </div>
 
           {saving && <p className="muted">Saving decision...</p>}
 
           <small className="muted">
-            Decisions are recorded locally in the project artifacts.
+            Decisions are recorded locally in project artifacts.
             They do not merge or create GitHub pull requests.
           </small>
         </section>
 
         <footer>
-          OmniSight-AI · Multimodal UI Self-Healing & RPA Agent
+          OmniSight-AI | Multimodal UI Self-Healing & RPA Agent
         </footer>
       </section>
     </main>
