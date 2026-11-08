@@ -208,3 +208,91 @@ button:hover {
     padding: 16px;
   }
 }
+
+/* Order summary */
+.order-summary {
+  margin-top: 28px;
+  padding: 20px;
+  background: #f7f9f6;
+  border: 1px solid #e3e8e2;
+  border-radius: 12px;
+}
+
+.order-summary h2 {
+  margin-bottom: 18px;
+  font-size: 1.1rem;
+}
+
+.summary-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin: 12px 0;
+  color: #68736b;
+  font-size: 0.9rem;
+}
+
+.summary-row span:last-child {
+  color: #202923;
+  font-weight: 650;
+  text-align: right;
+}
+
+.order-summary .total {
+  margin-top: 18px;
+  padding-top: 16px;
+}
+
+.shipping-note {
+  margin: 14px 0 0;
+  color: #39714b;
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+button {
+  transition: background-color 160ms ease, transform 160ms ease;
+}
+
+button:hover {
+  transform: translateY(-1px);
+}
+
+button:active {
+  transform: translateY(0);
+}
+
+button:focus-visible,
+.brand:focus-visible {
+  outline: 3px solid #39714b;
+  outline-offset: 3px;
+}
+
+input:focus-visible,
+select:focus-visible {
+  border-color: #39714b;
+}
+
+input:invalid:not(:placeholder-shown) {
+  border-color: #b54747;
+}
+
+.success {
+  margin-top: 18px;
+  border: 1px solid #c9e7d0;
+}
+
+.success p {
+  margin: 8px 0 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button {
+    transition: none;
+  }
+
+  button:hover {
+    transform: none;
+  }
+}

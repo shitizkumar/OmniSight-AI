@@ -7,6 +7,9 @@ import argparse
 import ipaddress
 import json
 import logging
+import logging
+import os
+import socket
 import socket
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -47,7 +50,7 @@ class CaptureConfig:
 
 
 def validate_public_url(url: str) -> None:
-    """Reject malformed URLs and non-public network destinations."""
+    """Reject unsafe destinations, with an opt-in local demo exception."""
     if not isinstance(url, str) or not url.strip():
         raise ValueError("A website URL is required.")
 
@@ -59,10 +62,26 @@ def validate_public_url(url: str) -> None:
     if not parsed.hostname or parsed.username or parsed.password:
         raise ValueError("Invalid website URL.")
 
-    if parsed.port is not None and not 1 <= parsed.port <= 65535:
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("Invalid URL port.") from exc
+
+    if port is not None and not 1 <= port <= 65535:
         raise ValueError("Invalid URL port.")
 
     hostname = parsed.hostname.lower().rstrip(".")
+
+    # Explicitly allow only the dedicated local demo server.
+    local_demo_enabled = os.getenv("OMNISIGHT_ALLOW_LOCAL_TEST_URL") == "1"
+
+    if (
+        local_demo_enabled
+        and parsed.scheme == "http"
+        and hostname == "127.0.0.1"
+        and port == 5174
+    ):
+        return
 
     if hostname == "localhost" or hostname.endswith(".localhost"):
         raise ValueError("Localhost destinations are not allowed.")
@@ -78,7 +97,7 @@ def validate_public_url(url: str) -> None:
                 ipaddress.ip_address(item[4][0])
                 for item in socket.getaddrinfo(
                     hostname,
-                    parsed.port or (443 if parsed.scheme == "https" else 80),
+                    port or (443 if parsed.scheme == "https" else 80),
                     type=socket.SOCK_STREAM,
                 )
             }
@@ -93,7 +112,6 @@ def validate_public_url(url: str) -> None:
             raise ValueError(
                 "Private, local and reserved network destinations are blocked."
             )
-
 
 def check_request_destination(route) -> None:
     """Block browser requests to private or reserved destinations."""

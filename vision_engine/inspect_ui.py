@@ -43,7 +43,7 @@ def inspect_html(
 
     if provider == "local":
         report = inspect_locally(html_path, website_mode)
-    elif provider in {"openai", "xai"}:
+    elif provider in {"openai", "xai", "groq"}:
         if not screenshot_path.is_file():
             raise FileNotFoundError(
                 f"Screenshot not found: {screenshot_path}"
@@ -52,7 +52,7 @@ def inspect_html(
     else:
         raise ValueError(
             f"Unsupported VLM_PROVIDER '{provider}'. "
-            "Use local, openai, or xai."
+            "Use local, openai, xai, or groq."
         )
 
     report_path.parent.mkdir(parents=True, exist_ok=True)

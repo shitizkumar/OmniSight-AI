@@ -1,4 +1,4 @@
-﻿
+
 """Vision-language model client for OmniSight-AI."""
 
 import base64
@@ -15,13 +15,12 @@ PROVIDERS = {
         "key_env": "OPENAI_API_KEY",
         "model_env": "OPENAI_VISION_MODEL",
     },
-    "xai": {
-        "endpoint": "https://api.x.ai/v1/responses",
-        "key_env": "XAI_API_KEY",
-        "model_env": "XAI_VISION_MODEL",
+    "groq": {
+        "endpoint": "https://api.groq.com/openai/v1/responses",
+        "key_env": "GROQ_API_KEY",
+        "model_env": "GROQ_VISION_MODEL",
     },
 }
-
 SEVERITIES = {"critical", "high", "medium", "low"}
 
 
@@ -36,9 +35,8 @@ def analyze_ui(
 
     if provider not in PROVIDERS:
         raise ValueError(
-            f"Unsupported VLM_PROVIDER '{provider}'. Use openai or xai."
+            f"Unsupported VLM_PROVIDER '{provider}'. Use openai or groq."
         )
-
     config = PROVIDERS[provider]
     api_key = os.getenv(config["key_env"])
     model = os.getenv(config["model_env"])
