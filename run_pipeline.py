@@ -5,6 +5,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).resolve().parent / ".env")
+
 from browser_agent.website_capture import (
     CaptureConfig,
     capture_website,
@@ -137,6 +141,7 @@ def run_website_pipeline(url: str, output_dir: Path) -> dict:
         url=url,
         output_dir=run_dir,
         run_id=run_id,
+        inspection_path=inspection_path,
     )
 
     print(

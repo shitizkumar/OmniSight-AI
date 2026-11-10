@@ -2,6 +2,7 @@
 """Browser verification for local checkout and external websites."""
 
 import argparse
+import hashlib
 import json
 import subprocess
 import time
@@ -9,6 +10,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.request import urlopen
+from vision_engine.image_cropper import crop_region
 
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import sync_playwright
@@ -79,12 +81,132 @@ def capture_component_boxes(page) -> dict:
         }
 
     return components
+def crop_component_regions(
+    screenshot_path: Path,
+    component_boxes: dict,
+    output_dir: Path,
+) -> dict:
+    """Generate focused image crops for detected checkout components."""
+    crops = {}
 
+    for name, box in component_boxes.items():
+        output_path = output_dir / f"{name}.png"
+
+        result = crop_region(
+            image_path=screenshot_path,
+            box=box,
+            output_path=output_path,
+            padding=20,
+        )
+
+        crops[name] = {
+            "path": str(output_path.resolve()),
+            "crop_size": result["crop_size"],
+            "crop_box": result["crop_box"],
+        }
+
+    return crops
+def load_inspection_defects(inspection_path: Path | None) -> list:
+    """Load validated defect records from a website inspection report."""
+    if inspection_path is None:
+        return []
+
+    inspection_path = Path(inspection_path)
+
+    if not inspection_path.is_file():
+        return []
+
+    try:
+        report = json.loads(inspection_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+
+    if not isinstance(report, dict):
+     return []
+
+    defects = report.get("defects", [])
+
+    if not isinstance(defects, list):
+        return []
+
+    return [
+        defect
+        for defect in defects
+        if isinstance(defect, dict)
+        and all(
+            isinstance(defect.get(field), str)
+            for field in ("element", "issue", "severity", "evidence")
+        )
+    ]
+def find_defect_element(page, defect: dict):
+    """Find one visible DOM element using exact text or accessibility attributes."""
+    target = " ".join(defect["element"].casefold().split())
+
+    if not target:
+        return None, "Empty element description."
+
+    matches = page.locator("body *").evaluate_all(
+        """(elements, target) => {
+            const normalize = value =>
+                (value || "").toLowerCase().replace(/\\s+/g, " ").trim();
+
+            const semanticTags = new Set([
+                "BUTTON", "A", "LABEL", "INPUT",
+                "TEXTAREA", "SELECT", "H1", "H2",
+                "H3", "H4", "H5", "H6"
+            ]);
+
+            return elements.flatMap((element, index) => {
+                const rect = element.getBoundingClientRect();
+                const style = getComputedStyle(element);
+
+                if (
+                    rect.width <= 0 ||
+                    rect.height <= 0 ||
+                    style.display === "none" ||
+                    style.visibility === "hidden" ||
+                    Number(style.opacity) === 0
+                ) {
+                    return [];
+                }
+
+                const attributes = [
+                    element.getAttribute("aria-label"),
+                    element.getAttribute("title"),
+                    element.getAttribute("alt"),
+                    element.id,
+                    element.getAttribute("name"),
+                    element.getAttribute("data-testid")
+                ];
+
+                const attributeMatch = attributes.some(
+                    value => normalize(value) === target
+                );
+
+                const textMatch =
+                    (semanticTags.has(element.tagName) ||
+                     element.hasAttribute("role")) &&
+                    normalize(element.innerText) === target;
+
+                return attributeMatch || textMatch ? [index] : [];
+            });
+        }""",
+        target,
+    )
+
+    if len(matches) == 0:
+        return None, "No exact visible DOM match."
+
+    if len(matches) > 1:
+        return None, "Multiple visible DOM matches; crop skipped."
+
+    return page.locator("body *").nth(matches[0]), None
 
 def verify_website(
     url: str,
     output_dir: Path,
     run_id: str | None = None,
+    inspection_path: Path | None = None,
 ) -> dict:
     """Verify an external website without modifying it."""
     validate_public_url(url)
@@ -93,10 +215,12 @@ def verify_website(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     run_id = run_id or uuid.uuid4().hex
+    defects = load_inspection_defects(inspection_path)
 
     report = {
         "run_id": run_id,
         "verification_method": "read_only_playwright",
+        "defect_crops": {},
         "url": url,
         "verified_at": datetime.now(timezone.utc).isoformat(),
         "viewports": {},
@@ -155,6 +279,13 @@ def verify_website(
                             animations="disabled",
                             timeout=30_000,
                         )
+                        if name == "mobile" and defects:
+                            report["defect_crops"] = crop_website_defects(
+                                page=page,
+                                screenshot_path=screenshot_path,
+                                defects=defects,
+                                output_dir=output_dir / "defect_crops",
+                            )
 
                         checks = {
                             "http_ok": bool(
@@ -221,6 +352,9 @@ def verify_checkout() -> dict:
     url = "http://127.0.0.1:4173"
     command = "npm.cmd run dev -- --host 127.0.0.1 --port 4173 --strictPort"
 
+    source_file = APP_DIR / "src" / "App.css"
+    initial_css_hash = hashlib.sha256(source_file.read_bytes()).hexdigest()
+
     server = subprocess.Popen(
         command,
         cwd=APP_DIR,
@@ -232,6 +366,7 @@ def verify_checkout() -> dict:
     report = {
         "run_id": str(uuid.uuid4()),
         "verification_method": "playwright_browser",
+        "source_file_sha256": initial_css_hash,
         "url": url,
         "verified_at": datetime.now(timezone.utc).isoformat(),
         "viewports": {},
@@ -327,6 +462,15 @@ def verify_checkout() -> dict:
                         full_page=True,
                         animations="disabled",
                     )
+                    component_crops = (
+                        crop_component_regions(
+                            screenshot_path,
+                            component_boxes,
+                            ARTIFACTS_DIR / "component_crops",
+                        )
+                        if component_boxes
+                        else {}
+                    )
 
                     page_checks["no_browser_errors"] = not errors
 
@@ -338,6 +482,7 @@ def verify_checkout() -> dict:
                         "browser_errors": errors,
                         "screenshot": str(screenshot_path),
                         "component_boxes": component_boxes,
+                        "component_crops": component_crops,
                         "status": "passed" if passed else "failed",
                     }
 
@@ -367,6 +512,12 @@ def verify_checkout() -> dict:
             server.kill()
             server.wait()
 
+        final_css_hash = hashlib.sha256(source_file.read_bytes()).hexdigest()
+
+        if final_css_hash != initial_css_hash:
+            report["overall_status"] = "failed"
+            report["error"] = "App.css changed during browser verification."
+
         REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
         REPORT_PATH.write_text(
             json.dumps(report, indent=4),
@@ -375,6 +526,73 @@ def verify_checkout() -> dict:
 
     return report
 
+
+def crop_website_defects(
+    page,
+    screenshot_path: Path,
+    defects: list,
+    output_dir: Path,
+) -> dict:
+    """Generate screenshot crops for uniquely matched website defects."""
+    results = {}
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    for index, defect in enumerate(defects, start=1):
+        name = f"defect_{index:02d}"
+
+        locator, reason = find_defect_element(page, defect)
+
+        if locator is None:
+            results[name] = {
+                "status": "skipped",
+                "reason": reason,
+                "element": defect["element"],
+                "issue": defect["issue"],
+                "severity": defect["severity"],
+            }
+            continue
+
+        box = locator.evaluate("""element => {
+            const rect = element.getBoundingClientRect();
+
+            return {
+                x: Math.round(rect.x + window.scrollX),
+                y: Math.round(rect.y + window.scrollY),
+                width: Math.round(rect.width),
+                height: Math.round(rect.height)
+            };
+        }""")
+
+        output_path = output_dir / f"{name}.png"
+
+        try:
+            crop = crop_region(
+                screenshot_path,
+                box,
+                output_path,
+                padding=20,
+            )
+        except (ValueError, OSError) as error:
+            results[name] = {
+                "status": "skipped",
+                "reason": str(error),
+                "element": defect["element"],
+                "issue": defect["issue"],
+                "severity": defect["severity"],
+            }
+            continue
+
+        results[name] = {
+            "status": "created",
+            "path": str(output_path.resolve()),
+            "crop_size": crop["crop_size"],
+            "crop_box": crop["crop_box"],
+            "element": defect["element"],
+            "issue": defect["issue"],
+            "severity": defect["severity"],
+        }
+
+    return results
 
 def main() -> None:
     parser = argparse.ArgumentParser(

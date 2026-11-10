@@ -605,3 +605,27 @@ footer {
     grid-template-columns: 1fr;
   }
 }
+
+.defect-crop {
+  margin-top: 16px;
+  padding: 12px;
+  background: #111e31;
+  border: 1px solid #293951;
+  border-radius: 8px;
+}
+
+.defect-crop h4 {
+  margin: 0 0 10px;
+  color: #dbeafe;
+  font-size: 12px;
+}
+
+.defect-crop img {
+  display: block;
+  width: 100%;
+  max-width: 560px;
+  height: auto;
+  border: 1px solid #3b4d66;
+  border-radius: 6px;
+  cursor: zoom-in;
+}

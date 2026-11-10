@@ -45,7 +45,6 @@ function App() {
   const [inspecting, setInspecting] = useState(false);
   const [websiteError, setWebsiteError] = useState("");
   const [pollCount, setPollCount] = useState(0);
-  const [repairCss, setRepairCss] = useState("");
   const [repairing, setRepairing] = useState(false);
   const [repairError, setRepairError] = useState("");
   const [repairResult, setRepairResult] = useState(null);
@@ -142,7 +141,6 @@ function App() {
       setPollCount(0);
       setRepairResult(null);
       setRepairError("");
-      setRepairCss("");
 
       const response = await fetch(`${API_URL}/api/qa/inspect`, {
         method: "POST",
@@ -222,7 +220,7 @@ function App() {
   }
 
   async function previewApprovedRepair() {
-    if (!runId || !jobId || !repairCss.trim()) return;
+    if (!runId || !jobId) return;
 
     try {
       setRepairing(true);
@@ -236,7 +234,6 @@ function App() {
         },
         body: JSON.stringify({
           run_id: runId,
-          css_patch: repairCss.trim(),
           viewport_width: 320,
           viewport_height: 720,
         }),
@@ -548,15 +545,43 @@ function App() {
           {defects.length === 0 ? (
             <p className="empty-state">No UI defects detected in this report.</p>
           ) : (
-            defects.map((defect, index) => (
-              <article className="issue-card" key={index}>
-                <h3>{defect.element}</h3>
-                <p>{defect.issue}</p>
-                <span className="severity">{defect.severity}</span>
-                <p><strong>Evidence:</strong> {defect.evidence}</p>
-                <p><strong>Suggested fix:</strong> {defect.suggested_fix}</p>
-              </article>
-            ))
+            defects.map((defect, index) => {
+              const cropName = `defect_${String(index + 1).padStart(2, "0")}`;
+              const crop = browser.defect_crops?.[cropName];
+              const cropUrl = jobId
+                ? `${API_URL}/api/qa/runs/${encodeURIComponent(jobId)}/defect-crops/${cropName}.png`
+                : "";
+
+              return (
+                <article className="issue-card" key={index}>
+                  <h3>{defect.element}</h3>
+                  <p>{defect.issue}</p>
+                  <span className="severity">{defect.severity}</span>
+                  <p><strong>Evidence:</strong> {defect.evidence || "Not provided"}</p>
+                  <p><strong>Suggested fix:</strong> {defect.suggested_fix || "Not provided"}</p>
+
+                  {crop?.status === "created" && cropUrl ? (
+                    <div className="defect-crop">
+                      <h4>Defect screenshot</h4>
+                      <a href={cropUrl} target="_blank" rel="noreferrer">
+                        <img
+                          src={cropUrl}
+                          alt={`Screenshot crop for ${cropName}`}
+                          loading="lazy"
+                          onError={(event) => {
+                            event.currentTarget.style.display = "none";
+                          }}
+                        />
+                      </a>
+                    </div>
+                  ) : (
+                    <p className="muted">
+                      Crop unavailable: {crop?.reason || "No screenshot crop generated for this defect."}
+                    </p>
+                  )}
+                </article>
+              );
+            })
           )}
         </section>
 
@@ -607,34 +632,18 @@ function App() {
           ) : (
             <>
               <p>
-                Enter a CSS patch to test against the captured page at a
-                320 ? 720 viewport. This creates a temporary preview and does
-                not modify the external website or project source files.
+                OmniSight AI will generate a targeted CSS patch from the
+                detected defect and test it against the captured page at a
+                320 x 720 viewport. This creates a temporary browser preview;
+                it does not modify the external website or project source files.
               </p>
-
-              <textarea
-                value={repairCss}
-                onChange={(event) => setRepairCss(event.target.value)}
-                placeholder="Example: body { overflow-x: hidden; }"
-                rows={5}
-                maxLength={10000}
-                disabled={!canRepair || repairing}
-                style={{
-                  width: "100%",
-                  boxSizing: "border-box",
-                  padding: "12px",
-                  margin: "12px 0",
-                  fontFamily: "monospace",
-                  resize: "vertical",
-                }}
-              />
 
               <button
                 className="approve-btn"
                 onClick={previewApprovedRepair}
-                disabled={!canRepair || repairing || !repairCss.trim()}
+                disabled={!canRepair || repairing}
               >
-                {repairing ? "Generating preview..." : "Generate repair preview"}
+                {repairing ? "Generating preview..." : "Generate AI repair preview"}
               </button>
             </>
           )}
@@ -661,6 +670,25 @@ function App() {
                 External website modified:{" "}
                 {String(repairResult.external_website_modified)}
               </p>
+
+              {repairResult.ai_repair && (
+                <div className="issue-card">
+                  <h3>AI-generated repair</h3>
+                  <p>{repairResult.ai_repair.explanation}</p>
+                  <p>
+                    Provider: {repairResult.ai_repair.provider} |
+                    Model: {repairResult.ai_repair.model}
+                  </p>
+                  <pre style={{
+                    whiteSpace: "pre-wrap",
+                    overflowX: "auto",
+                    padding: "12px",
+                    borderRadius: "8px",
+                  }}>
+                    {repairResult.ai_repair.generated_css}
+                  </pre>
+                </div>
+              )}
 
               <div className="screenshot-grid">
                 <article className="screenshot-card">

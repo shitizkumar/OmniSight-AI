@@ -1,5 +1,6 @@
 ﻿
 import json
+import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -9,10 +10,13 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+from github_integration.pull_request import create_pull_request
 
 from browser_agent.website_capture import validate_public_url
 from run_pipeline import run_website_pipeline
 from repair_engine.self_heal import apply_approved_url_patch
+from vision_engine.vlm_client import generate_css_patch
+import httpx
 
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -69,10 +73,14 @@ class QADecision(BaseModel):
     run_id: str = Field(min_length=1)
     decision: Literal["approved", "rejected"]
 class URLRepairRequest(BaseModel):
-    run_id: str = Field(min_length=1)
-    css_patch: str = Field(min_length=1, max_length=10_000)
+    run_id: str = Field(min_length=1, max_length=64)
     viewport_width: int = Field(default=320, ge=1, le=3840)
     viewport_height: int = Field(default=720, ge=1, le=2160)
+class GitHubPullRequestRequest(BaseModel):
+    run_id: str = Field(min_length=1, max_length=64)
+    commit_message: str = Field(min_length=1, max_length=200)
+    pr_title: str = Field(min_length=1, max_length=200)
+    pr_body: str = Field(min_length=1, max_length=5000)
 
 
 def read_report(path: Path) -> dict:
@@ -299,6 +307,40 @@ def get_repair_preview(job_id: str, filename: str):
 
     return FileResponse(preview_path, media_type="image/png")
 
+
+@app.get("/api/qa/runs/{job_id}/defect-crops/{filename}")
+def get_defect_crop(job_id: str, filename: str):
+    if not re.fullmatch(r"defect_\d{2}\.png", filename):
+        raise HTTPException(
+            status_code=404,
+            detail="Defect crop not found.",
+        )
+
+    status = read_report(job_status_path(job_id))
+
+    if not status:
+        raise HTTPException(
+            status_code=404,
+            detail="Inspection job not found.",
+        )
+
+    run_id = status.get("run_id")
+
+    if not run_id:
+        raise HTTPException(
+            status_code=404,
+            detail="Inspection results are not available.",
+        )
+
+    crop_path = WEBSITE_RUNS_DIR / run_id / "defect_crops" / filename
+
+    if not crop_path.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail="Defect crop file not found.",
+        )
+
+    return FileResponse(crop_path, media_type="image/png")
 @app.post("/api/qa/decision")
 def save_qa_decision(payload: QADecision):
     website_run_dir = WEBSITE_RUNS_DIR / payload.run_id
@@ -406,12 +448,26 @@ def repair_approved_website(payload: URLRepairRequest):
             detail="No supported horizontal overflow defect was found.",
         )
 
-    css_patch = payload.css_patch
+    try:
+        generated = generate_css_patch(
+            html_path=html_path,
+            defects=defects,
+        )
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"AI CSS generation failed: {exc}",
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="AI CSS provider request failed.",
+        ) from exc
 
     try:
         result = apply_approved_url_patch(
             html_path=html_path,
-            css_patch=css_patch,
+            css_patch=generated["css_patch"],
             output_dir=run_dir / "repair_preview",
             approved=True,
             viewport={
@@ -426,7 +482,71 @@ def repair_approved_website(payload: URLRepairRequest):
         ) from exc
 
     return {
-        "message": "Approved URL repair preview completed.",
+        "message": "AI-generated approved repair preview completed.",
         "run_id": payload.run_id,
+        "ai_repair": {
+            "explanation": generated["explanation"],
+            "provider": generated["provider"],
+            "model": generated["model"],
+            "generated_css": generated["css_patch"],
+        },
         **result,
+    }
+@app.post("/api/qa/github/pull-request")
+def create_qa_pull_request(payload: GitHubPullRequestRequest):
+    if any(
+        char not in "0123456789abcdef-"
+        for char in payload.run_id.lower()
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid website run ID.",
+        )
+
+    run_dir = WEBSITE_RUNS_DIR / payload.run_id
+
+    if not run_dir.is_dir():
+        raise HTTPException(
+            status_code=404,
+            detail="Website run not found.",
+        )
+
+    decision = read_report(run_dir / "qa_decision.json")
+
+    if (
+        decision.get("run_id") != payload.run_id
+        or decision.get("decision") != "approved"
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="An approved QA decision is required.",
+        )
+
+    report_path = run_dir / "browser_verification_report.json"
+
+    if not report_path.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail="Browser verification report not found.",
+        )
+
+    try:
+        pull_request_url = create_pull_request(
+            file_path="mock-store/src/App.css",
+            commit_message=payload.commit_message,
+            pr_title=payload.pr_title,
+            pr_body=payload.pr_body,
+            expected_run_id=payload.run_id,
+            report_path=report_path,
+        )
+    except (RuntimeError, ValueError, FileNotFoundError) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=str(exc),
+        ) from exc
+
+    return {
+        "message": "GitHub pull request created.",
+        "run_id": payload.run_id,
+        "pull_request_url": pull_request_url,
     }

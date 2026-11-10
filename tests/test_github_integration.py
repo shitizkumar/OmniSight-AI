@@ -1,4 +1,5 @@
 
+import hashlib
 import json
 import uuid
 
@@ -97,6 +98,9 @@ def setup_pr_environment(monkeypatch, tmp_path):
     report_path.parent.mkdir(parents=True)
 
     report = create_valid_report()
+    report["source_file_sha256"] = hashlib.sha256(
+        source_file.read_bytes()
+    ).hexdigest()
     report_path.write_text(json.dumps(report), encoding="utf-8")
 
     monkeypatch.setattr(pull_request, "ROOT_DIR", project_root)
@@ -218,7 +222,7 @@ def test_no_source_changes_does_not_create_branch(setup_pr_environment):
     )
     source_file.write_text("old content", encoding="utf-8")
 
-    with pytest.raises(RuntimeError, match="No source changes"):
+    with pytest.raises(RuntimeError, match="changed since browser verification"):
         pull_request.create_pull_request(
             "mock-store/src/App.css",
             "Update CSS",
@@ -229,4 +233,4 @@ def test_no_source_changes_does_not_create_branch(setup_pr_environment):
 
     assert fake_github.repo.branch_created is False
     assert fake_github.repo.pull_created is False
-    assert fake_github.closed is True
+    assert fake_github.repo.file_updated is False

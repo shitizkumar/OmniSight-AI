@@ -1,6 +1,9 @@
 
 import os
 import re
+import hashlib
+import os
+import re
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -23,11 +26,12 @@ def create_pull_request(
     pr_title: str,
     pr_body: str,
     expected_run_id: str,
+    report_path: Path | None = None,
 ) -> str:
     """Create a GitHub PR only after the expected browser run passes."""
 
-    validate_browser_report(
-        REPORT_PATH,
+    report = validate_browser_report(
+        report_path or REPORT_PATH,
         expected_run_id=expected_run_id,
     )
 
@@ -43,6 +47,13 @@ def create_pull_request(
         raise FileNotFoundError(file_path)
 
     content = local_file.read_text(encoding="utf-8")
+    current_hash = hashlib.sha256(local_file.read_bytes()).hexdigest()
+
+    if report.get("source_file_sha256") != current_hash:
+        raise RuntimeError(
+            "Source CSS has changed since browser verification. "
+            "Run browser verification again before creating a PR."
+        )
 
     token = os.getenv("GITHUB_TOKEN")
     if not token:
